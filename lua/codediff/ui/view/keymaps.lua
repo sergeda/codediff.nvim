@@ -235,7 +235,9 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     end
 
     -- Case 2: Cursor in diff buffers (original or modified)
-    if current_buf == original_bufnr or current_buf == modified_bufnr then
+    -- Get current buffer numbers from session (not closure) to handle async updates
+    local sess_orig, sess_mod = lifecycle.get_buffers(tabpage)
+    if current_buf == sess_orig or current_buf == sess_mod then
       local file_path = explorer.current_file_path
       local group = explorer.current_file_group
 
@@ -252,7 +254,44 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
       end
 
       local explorer_module = require("codediff.ui.explorer")
-      explorer_module.toggle_stage_file(explorer.git_root, file_path, group)
+      explorer_module.toggle_stage_file(explorer.git_root, file_path, group, function(err)
+        if not err then
+          -- Determine new group after staging/unstaging
+          local new_group = (group == "staged") and "unstaged" or "staged"
+
+          -- When tree is hidden, manually update git status and reload file
+          if explorer.is_hidden then
+            -- Fetch updated git status to refresh tree data
+            local git = require("codediff.core.git")
+            git.get_status(explorer.git_root, function(git_err, status_result)
+              if not git_err and status_result then
+                vim.schedule(function()
+                  -- Update explorer's status_result (used by navigate functions)
+                  explorer.status_result = status_result
+
+                  -- Update tracked group
+                  explorer.current_file_group = new_group
+
+                  -- Reload the file with new group
+                  explorer.on_file_select({
+                    path = file_path,
+                    status = explorer.current_selection and explorer.current_selection.status or "M",
+                    git_root = explorer.git_root,
+                    group = new_group,
+                  }, { force = true, no_jump = true })
+
+                  auto_refresh.sync_mutable_buffers(tabpage)
+                end)
+              end
+            end)
+          else
+            -- Tree is visible: do full refresh
+            local refresh_module = require("codediff.ui.explorer.refresh")
+            refresh_module.refresh(explorer)
+            auto_refresh.sync_mutable_buffers(tabpage)
+          end
+        end
+      end)
       return
     end
 
@@ -629,6 +668,28 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     end
     if keymaps.prev_file then
       lifecycle.set_tab_keymap(tabpage, "n", keymaps.prev_file, navigation.prev_file, { desc = "Previous file" })
+    end
+  end
+
+  -- Group-filtered file navigation (]v, [v for unstaged) - works in explorer mode only
+  if is_explorer_mode then
+    if keymaps.next_unstaged then
+      lifecycle.set_tab_keymap(tabpage, "n", keymaps.next_unstaged, function()
+        local explorer_obj = lifecycle.get_explorer(tabpage)
+        if explorer_obj then
+          local explorer_module = require("codediff.ui.explorer")
+          explorer_module.navigate_next_in_group(explorer_obj, "unstaged")
+        end
+      end, { desc = "Next unstaged file" })
+    end
+    if keymaps.prev_unstaged then
+      lifecycle.set_tab_keymap(tabpage, "n", keymaps.prev_unstaged, function()
+        local explorer_obj = lifecycle.get_explorer(tabpage)
+        if explorer_obj then
+          local explorer_module = require("codediff.ui.explorer")
+          explorer_module.navigate_prev_in_group(explorer_obj, "unstaged")
+        end
+      end, { desc = "Previous unstaged file" })
     end
   end
 

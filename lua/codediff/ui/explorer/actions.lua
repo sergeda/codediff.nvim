@@ -129,6 +129,138 @@ function M.navigate_prev(explorer)
   explorer.on_file_select(prev_file.data)
 end
 
+-- Navigate to next file in a specific group (e.g., "unstaged" or "staged")
+function M.navigate_next_in_group(explorer, group)
+  -- When tree is hidden, get files directly from status_result instead of tree
+  local all_files
+  if explorer.is_hidden and explorer.status_result then
+    all_files = {}
+    local file_list = group == "staged" and explorer.status_result.staged or explorer.status_result.unstaged
+    for _, f in ipairs(file_list or {}) do
+      table.insert(all_files, { data = vim.tbl_extend("force", f, { group = group, git_root = explorer.git_root }) })
+    end
+  else
+    all_files = refresh_module.get_all_files(explorer.tree, group)
+  end
+
+  if #all_files == 0 then
+    vim.notify("No " .. group .. " files in explorer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Use tracked current file path and group
+  local current_path = explorer.current_file_path
+  local current_group = explorer.current_file_group
+
+  -- If no current path, or current file is not in this group, select first file in group
+  if not current_path or current_group ~= group then
+    local first_file = all_files[1]
+    explorer.on_file_select(first_file.data)
+    return
+  end
+
+  -- Find current index
+  local current_index = 0
+  for i, file in ipairs(all_files) do
+    if file.data.path == current_path then
+      current_index = i
+      break
+    end
+  end
+
+  -- Get next file (wrap around if enabled)
+  if current_index >= #all_files and not config.options.diff.cycle_next_file then
+    vim.api.nvim_echo({ { string.format("Last %s file (%d of %d)", group, #all_files, #all_files), "WarningMsg" } }, false, {})
+    return
+  else
+    vim.api.nvim_echo({}, false, {})
+  end
+  local next_index = current_index % #all_files + 1
+  local next_file = all_files[next_index]
+
+  -- Update tree selection visually (if tree is visible)
+  local current_win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(explorer.winid) then
+    local line = find_node_line(explorer, next_file.data.path, next_file.data.group)
+    if line then
+      vim.api.nvim_set_current_win(explorer.winid)
+      vim.api.nvim_win_set_cursor(explorer.winid, { line, 0 })
+      vim.api.nvim_set_current_win(current_win)
+    end
+  end
+
+  -- Trigger file select
+  explorer.on_file_select(next_file.data)
+end
+
+-- Navigate to previous file in a specific group (e.g., "unstaged" or "staged")
+function M.navigate_prev_in_group(explorer, group)
+  -- When tree is hidden, get files directly from status_result instead of tree
+  local all_files
+  if explorer.is_hidden and explorer.status_result then
+    all_files = {}
+    local file_list = group == "staged" and explorer.status_result.staged or explorer.status_result.unstaged
+    for _, f in ipairs(file_list or {}) do
+      table.insert(all_files, { data = vim.tbl_extend("force", f, { group = group, git_root = explorer.git_root }) })
+    end
+  else
+    all_files = refresh_module.get_all_files(explorer.tree, group)
+  end
+
+  if #all_files == 0 then
+    vim.notify("No " .. group .. " files in explorer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Use tracked current file path and group
+  local current_path = explorer.current_file_path
+  local current_group = explorer.current_file_group
+
+  -- If no current path, or current file is not in this group, select last file in group
+  if not current_path or current_group ~= group then
+    local last_file = all_files[#all_files]
+    explorer.on_file_select(last_file.data)
+    return
+  end
+
+  -- Find current index
+  local current_index = 0
+  for i, file in ipairs(all_files) do
+    if file.data.path == current_path then
+      current_index = i
+      break
+    end
+  end
+
+  -- Get previous file (wrap around if enabled)
+  if current_index <= 1 and not config.options.diff.cycle_next_file then
+    vim.api.nvim_echo({ { string.format("First %s file (1 of %d)", group, #all_files), "WarningMsg" } }, false, {})
+    return
+  else
+    vim.api.nvim_echo({}, false, {})
+  end
+  local prev_index = current_index - 2
+  if prev_index < 0 then
+    prev_index = #all_files + prev_index
+  end
+  prev_index = prev_index % #all_files + 1
+  local prev_file = all_files[prev_index]
+
+  -- Update tree selection visually (if tree is visible)
+  local current_win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(explorer.winid) then
+    local line = find_node_line(explorer, prev_file.data.path, prev_file.data.group)
+    if line then
+      vim.api.nvim_set_current_win(explorer.winid)
+      vim.api.nvim_win_set_cursor(explorer.winid, { line, 0 })
+      vim.api.nvim_set_current_win(current_win)
+    end
+  end
+
+  -- Trigger file select
+  explorer.on_file_select(prev_file.data)
+end
+
 -- Toggle explorer visibility (hide/show)
 function M.toggle_visibility(explorer)
   if not explorer or not explorer.split then
@@ -193,8 +325,9 @@ end
 -- @param git_root: git repository root
 -- @param file_path: relative path to file
 -- @param group: "staged", "unstaged", or "conflicts"
+-- @param on_complete: optional callback function(err) called after operation completes
 -- @return boolean: true if operation was initiated
-function M.toggle_stage_file(git_root, file_path, group)
+function M.toggle_stage_file(git_root, file_path, group, on_complete)
   if not git_root then
     vim.notify("Stage/unstage only available in git mode", vim.log.levels.WARN)
     return false
@@ -217,6 +350,9 @@ function M.toggle_stage_file(git_root, file_path, group)
           vim.notify(err, vim.log.levels.ERROR)
         end)
       end
+      if on_complete then
+        vim.schedule(function() on_complete(err) end)
+      end
     end)
   elseif group == "unstaged" then
     -- Stage file
@@ -226,6 +362,9 @@ function M.toggle_stage_file(git_root, file_path, group)
           vim.notify(err, vim.log.levels.ERROR)
         end)
       end
+      if on_complete then
+        vim.schedule(function() on_complete(err) end)
+      end
     end)
   elseif group == "conflicts" then
     -- Stage conflict file (marks as resolved)
@@ -234,6 +373,9 @@ function M.toggle_stage_file(git_root, file_path, group)
         vim.schedule(function()
           vim.notify(err, vim.log.levels.ERROR)
         end)
+      end
+      if on_complete then
+        vim.schedule(function() on_complete(err) end)
       end
     end)
   end

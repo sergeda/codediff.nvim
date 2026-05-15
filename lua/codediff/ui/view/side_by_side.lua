@@ -673,6 +673,13 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
   -- Update lifecycle session metadata
   lifecycle.update_paths(tabpage, session_config.original_path, session_config.modified_path)
 
+  -- Update buffers IMMEDIATELY so keymaps work right away
+  lifecycle.update_buffers(tabpage, original_info.bufnr, modified_info.bufnr)
+
+  -- Set up keymaps immediately on new buffers (will be called again in render_everything, but that's okay)
+  local is_explorer_mode = session.mode == "explorer"
+  setup_all_keymaps(tabpage, original_info.bufnr, modified_info.bufnr, is_explorer_mode)
+
   -- Delete old virtual buffers if they were virtual AND are not reused
   if lifecycle.is_original_virtual(tabpage) and old_original_buf ~= original_info.bufnr and old_original_buf ~= modified_info.bufnr then
     pcall(vim.api.nvim_buf_delete, old_original_buf, { force = true })

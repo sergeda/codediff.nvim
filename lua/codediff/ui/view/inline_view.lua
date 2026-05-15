@@ -379,6 +379,13 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
   end
   welcome_window.sync(modified_win)
 
+  -- Update buffers IMMEDIATELY so keymaps work right away
+  lifecycle.update_buffers(tabpage, orig_buf, mod_buf)
+
+  -- Set up keymaps immediately on new buffers (will be called again in render_everything, but that's okay)
+  local is_explorer_mode = session.mode == "explorer"
+  setup_keymaps(tabpage, orig_buf, mod_buf)
+
   local should_auto_scroll = auto_scroll_to_first_hunk == true
 
   local render_everything = function()

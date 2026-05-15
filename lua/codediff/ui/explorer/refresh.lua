@@ -332,13 +332,15 @@ function M.refresh(explorer)
         if found_file then
           -- Re-select current file — on_file_select guard handles deduplication
           -- Pass no_jump to preserve cursor position (this is a refresh, not user click)
+          -- Pass force if group changed (e.g. file moved from unstaged to staged)
+          local force_reload = (found_group ~= current_group)
           explorer.on_file_select({
             path = found_file.path,
             old_path = found_file.old_path,
             status = found_file.status,
             git_root = explorer.git_root,
             group = found_group,
-          }, { no_jump = true })
+          }, { no_jump = true, force = force_reload })
         else
           -- File was committed/removed — show welcome
           clear_current_file()
@@ -365,7 +367,9 @@ end
 
 -- Get flat list of all files from tree (unstaged + staged)
 -- Handles both list mode (flat) and tree mode (nested directories)
-function M.get_all_files(tree)
+-- @param tree: the tree object
+-- @param group_filter: optional string ("unstaged" or "staged") to filter files by group
+function M.get_all_files(tree, group_filter)
   local files = {}
 
   -- Recursively collect files from a node and its children
@@ -385,10 +389,13 @@ function M.get_all_files(tree)
           collect_files(node)
         elseif not node.data.type then
           -- It's a file (no type means file node)
-          table.insert(files, {
-            node = node,
-            data = node.data,
-          })
+          -- Filter by group if specified
+          if not group_filter or node.data.group == group_filter then
+            table.insert(files, {
+              node = node,
+              data = node.data,
+            })
+          end
         end
       end
     end
