@@ -138,6 +138,28 @@ function M.setup_auto_refresh(explorer, tabpage)
   return cleanup
 end
 
+-- Build a stable identity key for a group or directory node.
+-- Directory nodes carry `dir_path` (not `path`), so falling back to `name` would
+-- key every directory by its basename and make same-named directories elsewhere in
+-- the tree share one collapsed flag. The group prefix matters too: the same
+-- dir_path can appear under both the staged and unstaged groups.
+local function state_key(node)
+  local data = node.data
+  if not data then
+    return nil
+  end
+  if data.type == "group" then
+    return data.name and ("group:" .. data.name) or nil
+  elseif data.type == "directory" then
+    local path = data.dir_path or data.path or data.name
+    if not path then
+      return nil
+    end
+    return "dir:" .. (data.group or "") .. ":" .. path
+  end
+  return nil
+end
+
 -- Collect collapsed state from tree (groups and directories that user manually collapsed)
 local function collect_collapsed_state(tree)
   local collapsed = {}
@@ -148,8 +170,7 @@ local function collect_collapsed_state(tree)
     end
     local node_type = node.data.type
     if node_type == "group" or node_type == "directory" then
-      -- Use path for directories, name for groups as unique key
-      local key = node.data.path or node.data.name
+      local key = state_key(node)
       if key and not node:is_expanded() then
         collapsed[key] = true
       end
@@ -181,7 +202,7 @@ local function restore_collapsed_state(tree, collapsed, root_nodes)
     end
     local node_type = node.data.type
     if node_type == "group" or node_type == "directory" then
-      local key = node.data.path or node.data.name
+      local key = state_key(node)
       if key and collapsed[key] then
         node:collapse()
       end
@@ -220,15 +241,16 @@ function M.refresh(explorer)
   local current_node = explorer.tree:get_node()
   local current_path = current_node and current_node.data and current_node.data.path
 
-  -- Collect collapsed state before async operation
-  local collapsed_state = collect_collapsed_state(explorer.tree)
-
   local function process_result(err, status_result)
     vim.schedule(function()
       if err then
         vim.notify("Failed to refresh: " .. err, vim.log.levels.ERROR)
         return
       end
+
+      -- Collect collapsed state here rather than before the async git call, so
+      -- folds the user toggled while the call was in flight are not reverted.
+      local collapsed_state = collect_collapsed_state(explorer.tree)
 
       -- Rebuild tree nodes using same structure as create_tree_data
       local root_nodes = tree_module.create_tree_data(status_result, explorer.git_root, explorer.base_revision, not explorer.git_root, explorer.visible_groups)
